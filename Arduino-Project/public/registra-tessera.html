@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Registra la tua tessera — L'Orsetto Lavatore</title>
+<style>
+  body{font-family:sans-serif;background:#F1F4F0;color:#16232B;max-width:420px;margin:40px auto;padding:0 20px;}
+  h1{font-size:22px;margin-bottom:8px;}
+  p{color:#5C6B66;font-size:14px;margin-bottom:24px;}
+  label{display:block;font-size:13px;margin-bottom:6px;color:#173446;font-weight:600;}
+  input{width:100%;padding:12px;border:1px solid #B4B2A9;border-radius:8px;font-size:15px;margin-bottom:18px;box-sizing:border-box;}
+  button{width:100%;padding:14px;background:#F4B940;color:#173446;border:none;border-radius:100px;font-size:15px;font-weight:600;cursor:pointer;}
+  #esito{margin-top:16px;font-size:14px;}
+</style>
+</head>
+<body>
+  <h1>Registra la tua tessera</h1>
+  <p>Fallo una sola volta: da qui in poi, ogni volta che avvii un ciclo con questa tessera potrai ricevere l'SMS di fine lavaggio.</p>
+  <form id="form-registrazione">
+    <label for="tessera">Numero della tessera</label>
+    <input type="text" id="tessera" required placeholder="Il numero stampato sulla tessera">
+    <label for="telefono">Il tuo numero di cellulare</label>
+    <input type="tel" id="telefono" required placeholder="+39 333 1234567">
+    <button type="submit">Registra</button>
+  </form>
+  <div id="esito"></div>
+
+<script>
+/* Indirizzo relativo: funziona automaticamente, sia in locale sia online,
+   perché questa pagina viene servita dallo stesso server dell'API. */
+const URL_SERVER = "/api/registra-tessera";
+
+document.getElementById("form-registrazione").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const tessera = document.getElementById("tessera").value.trim();
+  const telefono = document.getElementById("telefono").value.trim();
+  const esito = document.getElementById("esito");
+  esito.textContent = "Invio in corso...";
+  try {
+    const risposta = await fetch(URL_SERVER, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tessera, telefono })
+    });
+    if (!risposta.ok) throw new Error();
+    esito.textContent = "Tessera registrata. Da ora riceverai l'SMS di fine ciclo.";
+  } catch (err) {
+    esito.textContent = "Non sono riuscito a registrare la tessera. Riprova o chiedi al banco.";
+  }
+});
+</script>
+</body>
+</html>

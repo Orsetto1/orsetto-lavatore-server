@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ricevi l'SMS di fine ciclo — L'Orsetto Lavatore</title>
+<style>
+  body{font-family:sans-serif;background:#F1F4F0;color:#16232B;max-width:420px;margin:40px auto;padding:0 20px;}
+  h1{font-size:22px;margin-bottom:8px;}
+  p{color:#5C6B66;font-size:14px;margin-bottom:24px;}
+  label{display:block;font-size:13px;margin-bottom:6px;color:#173446;font-weight:600;}
+  input{width:100%;padding:12px;border:1px solid #B4B2A9;border-radius:8px;font-size:15px;margin-bottom:18px;box-sizing:border-box;}
+  button{width:100%;padding:14px;background:#F4B940;color:#173446;border:none;border-radius:100px;font-size:15px;font-weight:600;cursor:pointer;}
+  #esito{margin-top:16px;font-size:14px;}
+  #non-registrata{margin-top:14px;font-size:13px;}
+  #non-registrata a{color:#4E88A6;}
+</style>
+</head>
+<body>
+  <!-- Ogni lavatrice ha il proprio QR code, che punta a questa pagina
+       con ?macchina=NOME già scritto nel link, cosi il cliente non deve
+       indicarlo a mano. Esempio di link da mettere nel QR:
+       associa.html?macchina=Lavatrice%209%20Kg%20-%20A -->
+  <h1 id="titolo">Ricevi l'SMS di fine ciclo</h1>
+  <p id="sottotitolo">Hai pagato con la tessera? Inserisci il numero per ricevere un SMS quando il bucato è pronto.</p>
+  <form id="form-associazione">
+    <label for="tessera">Numero della tessera</label>
+    <input type="text" id="tessera" required placeholder="Il numero stampato sulla tessera">
+    <button type="submit">Attiva l'avviso</button>
+  </form>
+  <div id="esito"></div>
+  <div id="non-registrata" style="display:none;">
+    Tessera non ancora registrata? <a href="registra-tessera.html">Registrala qui</a> (basta una volta).
+  </div>
+
+<script>
+/* Indirizzo relativo: funziona automaticamente, sia in locale sia online. */
+const URL_SERVER = "/api/associa-macchina";
+
+const parametri = new URLSearchParams(window.location.search);
+const nomeMacchina = parametri.get("macchina") || "";
+document.getElementById("sottotitolo").textContent =
+  nomeMacchina
+    ? `${nomeMacchina}: hai pagato con la tessera? Inserisci il numero per ricevere l'SMS a fine ciclo.`
+    : "Apri questa pagina dal QR code sulla lavatrice che hai avviato.";
+
+document.getElementById("form-associazione").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const tessera = document.getElementById("tessera").value.trim();
+  const esito = document.getElementById("esito");
+  const nonRegistrata = document.getElementById("non-registrata");
+  nonRegistrata.style.display = "none";
+  esito.textContent = "Attivazione in corso...";
+  try {
+    const risposta = await fetch(URL_SERVER, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nome: nomeMacchina, tessera })
+    });
+    if (risposta.status === 404) {
+      esito.textContent = "";
+      nonRegistrata.style.display = "block";
+      return;
+    }
+    if (!risposta.ok) throw new Error();
+    esito.textContent = "Fatto! Ti avviseremo via SMS a fine ciclo.";
+  } catch (err) {
+    esito.textContent = "Non sono riuscito ad attivare l'avviso. Riprova o chiedi al banco.";
+  }
+});
+</script>
+</body>
+</html>
