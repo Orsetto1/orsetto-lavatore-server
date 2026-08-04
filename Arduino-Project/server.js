@@ -63,15 +63,15 @@ app.get("/api/visita", (req, res) => {
 // scrivere lo stato. Cambiala con un valore a tua scelta, e mettine
 // una uguale nel firmware se vuoi aggiungere il controllo (opzionale
 // ma consigliato prima di andare online).
-const CHIAVE_ARDUINO = "cambia-questa-chiave";
+const CHIAVE_ARDUINO = "wp4ymc1VZtuH7rrDmm6HHXAOyqJcewLl";
 
 // Stato in memoria (per iniziare; per un uso serio conviene un database
 // che non si svuoti ogni volta che il server si riavvia)
 let statoMacchine = {
-  "Lavatrice 9 Kg - A":  { secondi: 0, telefono: null },
-  "Lavatrice 9 Kg - B":  { secondi: 0, telefono: null },
-  "Lavatrice 14 Kg - C": { secondi: 0, telefono: null },
-  "Lavatrice 18 Kg - D": { secondi: 0, telefono: null }
+  "Lavatrice 9 Kg - A":  { secondi: 0, pausa: false, telefono: null },
+  "Lavatrice 9 Kg - B":  { secondi: 0, pausa: false, telefono: null },
+  "Lavatrice 14 Kg - C": { secondi: 0, pausa: false, telefono: null },
+  "Lavatrice 18 Kg - D": { secondi: 0, pausa: false, telefono: null }
 };
 
 // Registro tessera -> telefono. Chi paga in contanti non ci finisce mai
@@ -105,6 +105,7 @@ app.post("/api/stato", (req, res) => {
     }
 
     statoMacchine[m.nome].secondi = m.secondi;
+    statoMacchine[m.nome].pausa = !!m.pausa;
   });
 
   res.json({ ok: true });
@@ -115,7 +116,8 @@ app.get("/api/stato", (req, res) => {
   const risposta = Object.entries(statoMacchine).map(([nome, dati]) => ({
     nome,
     libera: dati.secondi <= 0,
-    secondi: dati.secondi
+    secondi: dati.secondi,
+    pausa: dati.pausa
   }));
   res.json({ macchine: risposta });
 });
