@@ -67,7 +67,7 @@ const FILE_LISTINO = path.join(__dirname, "listino.json");
 
 // Cambia questa password prima di usare il pannello sul serio.
 // Deve essere la stessa cosa che scrivi anche in admin.html.
-const PASSWORD_PROPRIETARIO = "cambia-questa-password";
+const PASSWORD_PROPRIETARIO = "Gianca1#x2";
 
 const LISTINO_DEFAULT = {
   lavatrici: [
