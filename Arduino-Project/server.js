@@ -59,6 +59,55 @@ app.get("/api/visita", (req, res) => {
   res.json({ visite: nuovoValore });
 });
 
+// ---- Listino prezzi, modificabile dal pannello proprietario ----
+// I NOMI delle lavatrici non si toccano da qui: sono agganciati al
+// firmware Arduino, che li usa per riconoscere ogni macchina. Da qui
+// si modificano solo i prezzi (e, per le asciugatrici, anche il tempo).
+const FILE_LISTINO = path.join(__dirname, "listino.json");
+
+// Cambia questa password prima di usare il pannello sul serio.
+// Deve essere la stessa cosa che scrivi anche in admin.html.
+const PASSWORD_PROPRIETARIO = "cambia-questa-password";
+
+const LISTINO_DEFAULT = {
+  lavatrici: [
+    { nome: "Lavatrice 9 Kg - A",  prezzo: 4.50 },
+    { nome: "Lavatrice 9 Kg - B",  prezzo: 4.50 },
+    { nome: "Lavatrice 14 Kg - C", prezzo: 6.50 },
+    { nome: "Lavatrice 18 Kg - D", prezzo: 8.50 }
+  ],
+  asciugatrici: { minuti: 15, prezzo: 2.50 },
+  sacchettoSottovuoto: 2.00
+};
+
+function leggiListino() {
+  try {
+    return JSON.parse(fs.readFileSync(FILE_LISTINO, "utf8"));
+  } catch {
+    return LISTINO_DEFAULT;
+  }
+}
+
+function scriviListino(dati) {
+  fs.writeFileSync(FILE_LISTINO, JSON.stringify(dati, null, 2));
+}
+
+// Il sito legge qui i prezzi attuali: nessuna password richiesta,
+// è solo lettura, come guardare un cartellone prezzi in negozio.
+app.get("/api/listino", (req, res) => {
+  res.json(leggiListino());
+});
+
+// Il pannello proprietario scrive qui le modifiche: richiede la password.
+app.post("/api/listino", (req, res) => {
+  const password = req.header("X-Password");
+  if (password !== PASSWORD_PROPRIETARIO) {
+    return res.status(401).json({ errore: "password errata" });
+  }
+  scriviListino(req.body);
+  res.json({ ok: true });
+});
+
 // Chiave segreta condivisa: solo l'Arduino deve poterla usare per
 // scrivere lo stato. Cambiala con un valore a tua scelta, e mettine
 // una uguale nel firmware se vuoi aggiungere il controllo (opzionale
