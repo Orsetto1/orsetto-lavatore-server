@@ -1,12 +1,18 @@
 /*
-  L'ORSETTO LAVATORE — server di stato lavatrici
+  L'ORSETTO LAVATORE — server di stato lavatrici e asciugatrici
 
   COSA FA:
   - Riceve dall'Arduino, ogni pochi secondi, lo stato delle 4 lavatrici
-    (POST /api/stato).
+    e (quando saranno collegate) delle 4 asciugatrici (POST /api/stato).
   - Lo mette a disposizione del sito e della app (GET /api/stato).
   - Quando una lavatrice passa da "in corso" a "finita", chiama la
     funzione inviaSms() — da collegare al tuo gestore SMS.
+  - Tiene il listino prezzi (lavatrici, asciugatrici, sottovuoto),
+    leggibile da chiunque e modificabile solo con password dal pannello
+    proprietario (admin.html). Per le asciugatrici il listino contiene
+    "minutiPerImpulso": è l'Arduino stesso a leggerlo da qui ogni
+    minuto circa, così cambiandolo dal pannello non serve ricaricare
+    il firmware.
 
   COME SI AVVIA (sul tuo PC, per fare una prova):
     npm install express cors
