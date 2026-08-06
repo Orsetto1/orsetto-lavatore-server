@@ -84,7 +84,7 @@ const LISTINO_DEFAULT = {
     { nome: "Lavatrice 14 Kg - C", prezzo: 6.50 },
     { nome: "Lavatrice 18 Kg - D", prezzo: 8.50 }
   ],
-  asciugatrici: { minuti: 15, prezzo: 2.50 },
+  asciugatrici: { minutiPerImpulso: 15, prezzo: 2.50 },
   sacchettoSottovuoto: 2.00
 };
 
@@ -136,7 +136,14 @@ let statoMacchine = {
   "Lavatrice 9 Kg - A":  { secondi: 0, pausa: false, telefono: null },
   "Lavatrice 9 Kg - B":  { secondi: 0, pausa: false, telefono: null },
   "Lavatrice 14 Kg - C": { secondi: 0, pausa: false, telefono: null },
-  "Lavatrice 18 Kg - D": { secondi: 0, pausa: false, telefono: null }
+  "Lavatrice 18 Kg - D": { secondi: 0, pausa: false, telefono: null },
+  // Asciugatrici: non ancora collegate fisicamente all'Arduino (in
+  // attesa del cambio centraline), ma già pronte a ricevere dati non
+  // appena lo saranno, senza dover toccare il server in quel momento.
+  "Asciugatrice 1": { secondi: 0, pausa: false, telefono: null },
+  "Asciugatrice 2": { secondi: 0, pausa: false, telefono: null },
+  "Asciugatrice 3": { secondi: 0, pausa: false, telefono: null },
+  "Asciugatrice 4": { secondi: 0, pausa: false, telefono: null }
 };
 
 // Registro tessera -> telefono. Chi paga in contanti non ci finisce mai
