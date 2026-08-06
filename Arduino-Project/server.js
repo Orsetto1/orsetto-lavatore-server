@@ -67,7 +67,15 @@ const FILE_LISTINO = path.join(__dirname, "listino.json");
 
 // Cambia questa password prima di usare il pannello sul serio.
 // Deve essere la stessa cosa che scrivi anche in admin.html.
-const PASSWORD_PROPRIETARIO = "Gianca1#x2";
+// Cambia questa password prima di usare il pannello sul serio.
+// NON scriverla qui nel codice: impostala come variabile d'ambiente
+// su Render (Settings del servizio -> Environment -> Add Environment
+// Variable -> chiave "PASSWORD_PROPRIETARIO", valore la tua password).
+// Il valore qui sotto è solo una riserva per le prove in locale.
+const PASSWORD_PROPRIETARIO = process.env.PASSWORD_PROPRIETARIO || "cambia-questa-password";
+if (!process.env.PASSWORD_PROPRIETARIO) {
+  console.warn("ATTENZIONE: PASSWORD_PROPRIETARIO non impostata come variabile d'ambiente, sto usando quella di riserva. Da sistemare prima di andare online sul serio.");
+}
 
 const LISTINO_DEFAULT = {
   lavatrici: [
@@ -99,7 +107,7 @@ app.get("/api/listino", (req, res) => {
 });
 
 // Il pannello proprietario scrive qui le modifiche: richiede la password.
-app.post("/api/listino", (req, res) => {
+app.post("/api/listino", limitaRichieste, (req, res) => {
   const password = req.header("X-Password");
   if (password !== PASSWORD_PROPRIETARIO) {
     return res.status(401).json({ errore: "password errata" });
@@ -112,7 +120,15 @@ app.post("/api/listino", (req, res) => {
 // scrivere lo stato. Cambiala con un valore a tua scelta, e mettine
 // una uguale nel firmware se vuoi aggiungere il controllo (opzionale
 // ma consigliato prima di andare online).
-const CHIAVE_ARDUINO = "wp4ymc1VZtuH7rrDmm6HHXAOyqJcewLl";
+// Stessa cosa per la chiave dell'Arduino: impostala su Render come
+// variabile d'ambiente "CHIAVE_ARDUINO", e usa lo STESSO valore anche
+// nel firmware lavatrici_arduino.ino (quella invece resta scritta nel
+// file, perché l'Arduino non può leggere variabili d'ambiente — ma
+// almeno il server non la espone più su GitHub).
+const CHIAVE_ARDUINO = process.env.CHIAVE_ARDUINO || "wp4ymc1VZtuH7rrDmm6HHXAOyqJcewLl";
+if (!process.env.CHIAVE_ARDUINO) {
+  console.warn("ATTENZIONE: CHIAVE_ARDUINO non impostata come variabile d'ambiente, sto usando quella di riserva. Da sistemare prima di andare online sul serio.");
+}
 
 // Stato in memoria (per iniziare; per un uso serio conviene un database
 // che non si svuoti ogni volta che il server si riavvia)
@@ -171,14 +187,45 @@ app.get("/api/stato", (req, res) => {
   res.json({ macchine: risposta });
 });
 
+// ---- Limite semplice di richieste, per evitare abusi sugli indirizzi
+// pubblici (registrazione tessera, associazione macchina). Non richiede
+// librerie in più: tiene solo un conteggio in memoria per ogni IP.
+const richiestePerIp = {};
+const LIMITE_RICHIESTE = 15;      // richieste
+const FINESTRA_MS = 5 * 60 * 1000; // ogni 5 minuti
+
+function limitaRichieste(req, res, next) {
+  const ip = req.ip;
+  const ora = Date.now();
+  const voce = richiestePerIp[ip] || { conteggio: 0, dalMillis: ora };
+  if (ora - voce.dalMillis > FINESTRA_MS) {
+    voce.conteggio = 0;
+    voce.dalMillis = ora;
+  }
+  voce.conteggio++;
+  richiestePerIp[ip] = voce;
+  if (voce.conteggio > LIMITE_RICHIESTE) {
+    return res.status(429).json({ errore: "troppe richieste, riprova tra qualche minuto" });
+  }
+  next();
+}
+
+// Un numero di telefono scritto in modo ragionevole: cifre, spazi, + iniziale
+function telefonoValido(t) {
+  return typeof t === "string" && /^[+\d][\d\s]{6,18}$/.test(t.trim());
+}
+function tesseraValida(t) {
+  return typeof t === "string" && t.trim().length >= 1 && t.trim().length <= 40;
+}
+
 // PASSAGGIO 1 — una tantum: il cliente con la tessera registra il proprio
 // numero di tessera insieme al numero di telefono (pagina registra-tessera.html)
-app.post("/api/registra-tessera", (req, res) => {
+app.post("/api/registra-tessera", limitaRichieste, (req, res) => {
   const { tessera, telefono } = req.body;
-  if (!tessera || !telefono) {
-    return res.status(400).json({ errore: "tessera e telefono sono obbligatori" });
+  if (!tesseraValida(tessera) || !telefonoValido(telefono)) {
+    return res.status(400).json({ errore: "tessera o numero di telefono non validi" });
   }
-  registroTessere[tessera] = telefono;
+  registroTessere[tessera.trim()] = telefono.trim();
   res.json({ ok: true });
 });
 
@@ -186,17 +233,20 @@ app.post("/api/registra-tessera", (req, res) => {
 // tessera indica quale macchina ha avviato (pagina associa.html, es. da
 // QR code attaccato su ogni lavatrice). Chi paga in contanti salta questo
 // passaggio e quindi non riceverà mai l'SMS, solo lo stato sul sito.
-app.post("/api/associa-macchina", (req, res) => {
+app.post("/api/associa-macchina", limitaRichieste, (req, res) => {
   const { nome, tessera } = req.body;
   if (!statoMacchine[nome]) {
     return res.status(400).json({ errore: "macchina non trovata" });
   }
-  const telefono = registroTessere[tessera];
+  if (!tesseraValida(tessera)) {
+    return res.status(400).json({ errore: "tessera non valida" });
+  }
+  const telefono = registroTessere[tessera.trim()];
   if (!telefono) {
     return res.status(404).json({ errore: "tessera non registrata" });
   }
   statoMacchine[nome].telefono = telefono;
-  res.json({ ok: true, telefono });
+  res.json({ ok: true });
 });
 
 function inviaSms(numero, testo) {
