@@ -154,9 +154,23 @@ let statoMacchine = {
 
 // Registro tessera -> telefono. Chi paga in contanti non ci finisce mai
 // dentro, quindi non riceverà mai un SMS: solo lo stato sul sito.
-let registroTessere = {
-  // "1234567890": "+39333xxxxxxx"
-};
+// Salvato su file (come il contatore e il listino) cosi non si svuota
+// a ogni riavvio del server.
+const FILE_TESSERE = path.join(__dirname, "tessere.json");
+
+function leggiRegistroTessere() {
+  try {
+    return JSON.parse(fs.readFileSync(FILE_TESSERE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function scriviRegistroTessere(registro) {
+  fs.writeFileSync(FILE_TESSERE, JSON.stringify(registro, null, 2));
+}
+
+let registroTessere = leggiRegistroTessere();
 
 // L'Arduino manda qui lo stato aggiornato
 app.post("/api/stato", (req, res) => {
@@ -239,6 +253,7 @@ app.post("/api/registra-tessera", limitaRichieste, (req, res) => {
     return res.status(400).json({ errore: "tessera o numero di telefono non validi" });
   }
   registroTessere[tessera.trim()] = telefono.trim();
+  scriviRegistroTessere(registroTessere);
   res.json({ ok: true });
 });
 
