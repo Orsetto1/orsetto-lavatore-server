@@ -6,7 +6,8 @@
     e (quando saranno collegate) delle 4 asciugatrici (POST /api/stato).
   - Lo mette a disposizione del sito e della app (GET /api/stato).
   - Quando una lavatrice passa da "in corso" a "finita", chiama la
-    funzione inviaSms() — da collegare al tuo gestore SMS.
+    funzione inviaSms(), collegata a Skebby (serve impostare
+    SKEBBY_USERNAME e SKEBBY_PASSWORD come variabili d'ambiente).
   - Tiene il listino prezzi (lavatrici, asciugatrici, sottovuoto),
     leggibile da chiunque e modificabile solo con password dal pannello
     proprietario (admin.html). Per le asciugatrici il listino contiene
@@ -139,17 +140,17 @@ if (!process.env.CHIAVE_ARDUINO) {
 // Stato in memoria (per iniziare; per un uso serio conviene un database
 // che non si svuoti ogni volta che il server si riavvia)
 let statoMacchine = {
-  "Lavatrice 9 Kg - A":  { secondi: 0, pausa: false, telefono: null },
-  "Lavatrice 9 Kg - B":  { secondi: 0, pausa: false, telefono: null },
-  "Lavatrice 14 Kg - C": { secondi: 0, pausa: false, telefono: null },
-  "Lavatrice 18 Kg - D": { secondi: 0, pausa: false, telefono: null },
+  "Lavatrice 9 Kg - A":  { secondi: 0, stato: "libera", telefono: null },
+  "Lavatrice 9 Kg - B":  { secondi: 0, stato: "libera", telefono: null },
+  "Lavatrice 14 Kg - C": { secondi: 0, stato: "libera", telefono: null },
+  "Lavatrice 18 Kg - D": { secondi: 0, stato: "libera", telefono: null },
   // Asciugatrici: non ancora collegate fisicamente all'Arduino (in
   // attesa del cambio centraline), ma già pronte a ricevere dati non
   // appena lo saranno, senza dover toccare il server in quel momento.
-  "Asciugatrice 1": { secondi: 0, pausa: false, telefono: null },
-  "Asciugatrice 2": { secondi: 0, pausa: false, telefono: null },
-  "Asciugatrice 3": { secondi: 0, pausa: false, telefono: null },
-  "Asciugatrice 4": { secondi: 0, pausa: false, telefono: null }
+  "Asciugatrice 1": { secondi: 0, stato: "libera", telefono: null },
+  "Asciugatrice 2": { secondi: 0, stato: "libera", telefono: null },
+  "Asciugatrice 3": { secondi: 0, stato: "libera", telefono: null },
+  "Asciugatrice 4": { secondi: 0, stato: "libera", telefono: null }
 };
 
 // Registro tessera -> telefono. Chi paga in contanti non ci finisce mai
@@ -183,12 +184,13 @@ app.post("/api/stato", (req, res) => {
   macchine.forEach((m) => {
     if (!statoMacchine[m.nome]) return;
 
-    const eraInCorso = statoMacchine[m.nome].secondi > 0;
-    const oraLibera = m.secondi <= 0;
+    const statoPrecedente = statoMacchine[m.nome].stato || "libera";
+    const statoNuovo = m.stato || "libera";
 
-    // Se il ciclo è appena finito, manda l'SMS (solo se un telefono
-    // era stato associato tramite tessera) e libera l'associazione
-    if (eraInCorso && oraLibera) {
+    // L'SMS parte solo nel momento esatto in cui una macchina passa a
+    // "pronta" (fine ciclo vera, confermata dal segnale reale della
+    // lavatrice) — non per una semplice pausa, e non due volte di fila.
+    if (statoNuovo === "pronta" && statoPrecedente !== "pronta") {
       const telefono = statoMacchine[m.nome].telefono;
       if (telefono) {
         inviaSms(telefono, `${m.nome}: il tuo bucato è pronto! Puoi venire a ritirarlo.`);
@@ -197,7 +199,7 @@ app.post("/api/stato", (req, res) => {
     }
 
     statoMacchine[m.nome].secondi = m.secondi;
-    statoMacchine[m.nome].pausa = !!m.pausa;
+    statoMacchine[m.nome].stato = statoNuovo;
   });
 
   res.json({ ok: true });
@@ -207,9 +209,8 @@ app.post("/api/stato", (req, res) => {
 app.get("/api/stato", (req, res) => {
   const risposta = Object.entries(statoMacchine).map(([nome, dati]) => ({
     nome,
-    libera: dati.secondi <= 0,
-    secondi: dati.secondi,
-    pausa: dati.pausa
+    stato: dati.stato || "libera",
+    secondi: dati.secondi
   }));
   res.json({ macchine: risposta });
 });
@@ -277,12 +278,61 @@ app.post("/api/associa-macchina", limitaRichieste, (req, res) => {
   res.json({ ok: true });
 });
 
-function inviaSms(numero, testo) {
-  // DA COMPLETARE: qui va collegato il tuo gestore SMS
-  // (es. Twilio, Skebby, o un altro provider italiano).
-  // Per ora stampa solo un log, cosi puoi provare tutto il resto
-  // del sistema prima di attivare l'invio vero.
-  console.log(`[SMS a ${numero}] ${testo}`);
+// ---- Invio SMS vero, tramite Skebby ----
+// Credenziali: impostale come variabili d'ambiente su Render (Environment),
+// esattamente come già fatto per PASSWORD_PROPRIETARIO e CHIAVE_ARDUINO:
+//   SKEBBY_USERNAME = l'email con cui ti sei registrato su skebby.it
+//   SKEBBY_PASSWORD = la password del tuo account Skebby
+// Finché non le imposti, inviaSms scrive solo un log invece di mandare
+// l'SMS vero — così puoi provare tutto il resto senza consumare crediti.
+const SKEBBY_USERNAME = process.env.SKEBBY_USERNAME || null;
+const SKEBBY_PASSWORD = process.env.SKEBBY_PASSWORD || null;
+
+async function skebbyLogin() {
+  const url = `https://api.skebby.it/API/v1.0/REST/login?username=${encodeURIComponent(SKEBBY_USERNAME)}&password=${encodeURIComponent(SKEBBY_PASSWORD)}`;
+  const risposta = await fetch(url);
+  if (!risposta.ok) throw new Error(`Login Skebby fallito: ${risposta.status}`);
+  const testo = await risposta.text();
+  const [userKey, sessionKey] = testo.split(";");
+  if (!userKey || !sessionKey) throw new Error("Risposta di login Skebby inattesa: " + testo);
+  return { userKey, sessionKey };
+}
+
+async function inviaSms(numero, testo) {
+  if (!SKEBBY_USERNAME || !SKEBBY_PASSWORD) {
+    console.warn("ATTENZIONE: SKEBBY_USERNAME/SKEBBY_PASSWORD non impostate, SMS non inviato per davvero.");
+    console.log(`[SMS simulato a ${numero}] ${testo}`);
+    return;
+  }
+
+  try {
+    const { userKey, sessionKey } = await skebbyLogin();
+    const numeroPulito = numero.replace(/\s+/g, "");
+
+    const risposta = await fetch("https://api.skebby.it/API/v1.0/REST/sms", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "user_key": userKey,
+        "Session_key": sessionKey
+      },
+      body: JSON.stringify({
+        message: testo,
+        message_type: "TI",       // "Classic": consegna garantita, senza bisogno di un mittente registrato
+        returnCredits: true,
+        recipient: [numeroPulito]
+      })
+    });
+
+    const risultato = await risposta.json();
+    if (risposta.ok && risultato.result === "OK") {
+      console.log(`SMS inviato a ${numero}. Crediti rimasti: ${risultato.remaining_sms ?? "?"}`);
+    } else {
+      console.error(`Invio SMS fallito verso ${numero}:`, risultato);
+    }
+  } catch (err) {
+    console.error(`Errore durante l'invio SMS a ${numero}:`, err.message);
+  }
 }
 
 const PORTA = process.env.PORT || 3000;
