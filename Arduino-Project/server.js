@@ -6,8 +6,9 @@
     e (quando saranno collegate) delle 4 asciugatrici (POST /api/stato).
   - Lo mette a disposizione del sito e della app (GET /api/stato).
   - Quando una lavatrice passa da "in corso" a "finita", chiama la
-    funzione inviaSms(), collegata a Skebby (serve impostare
-    SKEBBY_USERNAME e SKEBBY_PASSWORD come variabili d'ambiente).
+    funzione accodaSms(): mette l'SMS in una lista d'attesa che
+    l'Arduino stesso legge e spedisce con il suo modulo SIM800L
+    (nessun servizio esterno di terzi, niente costi per SMS).
   - Tiene il listino prezzi (lavatrici, asciugatrici, sottovuoto),
     leggibile da chiunque e modificabile solo con password dal pannello
     proprietario (admin.html). Per le asciugatrici il listino contiene
@@ -92,7 +93,8 @@ const LISTINO_DEFAULT = {
     { nome: "Lavatrice 18 Kg - D", prezzo: 8.50 }
   ],
   asciugatrici: { minutiPerImpulso: 15, prezzo: 2.50 },
-  sacchettoSottovuoto: 2.00
+  sacchettoSottovuoto: 2.00,
+  promozioni: ""
 };
 
 function leggiListino() {
@@ -193,7 +195,7 @@ app.post("/api/stato", (req, res) => {
     if (statoNuovo === "pronta" && statoPrecedente !== "pronta") {
       const telefono = statoMacchine[m.nome].telefono;
       if (telefono) {
-        inviaSms(telefono, `${m.nome}: il tuo bucato è pronto! Puoi venire a ritirarlo.`);
+        accodaSms(telefono, `${m.nome}: il tuo bucato è pronto! Puoi venire a ritirarlo.`);
       }
       statoMacchine[m.nome].telefono = null;
     }
@@ -278,62 +280,82 @@ app.post("/api/associa-macchina", limitaRichieste, (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- Invio SMS vero, tramite Skebby ----
-// Credenziali: impostale come variabili d'ambiente su Render (Environment),
-// esattamente come già fatto per PASSWORD_PROPRIETARIO e CHIAVE_ARDUINO:
-//   SKEBBY_USERNAME = l'email con cui ti sei registrato su skebby.it
-//   SKEBBY_PASSWORD = la password del tuo account Skebby
-// Finché non le imposti, inviaSms scrive solo un log invece di mandare
-// l'SMS vero — così puoi provare tutto il resto senza consumare crediti.
-const SKEBBY_USERNAME = process.env.SKEBBY_USERNAME || null;
-const SKEBBY_PASSWORD = process.env.SKEBBY_PASSWORD || null;
+// ---- Coda SMS: l'SMS lo manda l'Arduino stesso, con il suo modulo
+// SIM800L e la sua SIM — il server si limita a tenere una piccola
+// "lista d'attesa" dei messaggi da mandare. L'Arduino, ogni tanto,
+// chiede "c'è qualcosa da mandare?" (GET /api/sms-da-mandare), lo
+// spedisce lui via GSM, e poi conferma al server che è stato inviato
+// (POST /api/sms-confermato) cosi non viene rimandato una seconda volta.
+// Salvata su file, come le altre code/registri, per non perdere SMS in
+// sospeso se il server si riavvia.
+const FILE_CODA_SMS = path.join(__dirname, "coda-sms.json");
+const MAX_TENTATIVI_SMS = 20; // dopo troppi tentativi falliti, l'SMS viene scartato
 
-async function skebbyLogin() {
-  const url = `https://api.skebby.it/API/v1.0/REST/login?username=${encodeURIComponent(SKEBBY_USERNAME)}&password=${encodeURIComponent(SKEBBY_PASSWORD)}`;
-  const risposta = await fetch(url);
-  if (!risposta.ok) throw new Error(`Login Skebby fallito: ${risposta.status}`);
-  const testo = await risposta.text();
-  const [userKey, sessionKey] = testo.split(";");
-  if (!userKey || !sessionKey) throw new Error("Risposta di login Skebby inattesa: " + testo);
-  return { userKey, sessionKey };
-}
-
-async function inviaSms(numero, testo) {
-  if (!SKEBBY_USERNAME || !SKEBBY_PASSWORD) {
-    console.warn("ATTENZIONE: SKEBBY_USERNAME/SKEBBY_PASSWORD non impostate, SMS non inviato per davvero.");
-    console.log(`[SMS simulato a ${numero}] ${testo}`);
-    return;
-  }
-
+function leggiCodaSms() {
   try {
-    const { userKey, sessionKey } = await skebbyLogin();
-    const numeroPulito = numero.replace(/\s+/g, "");
-
-    const risposta = await fetch("https://api.skebby.it/API/v1.0/REST/sms", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "user_key": userKey,
-        "Session_key": sessionKey
-      },
-      body: JSON.stringify({
-        message: testo,
-        message_type: "TI",       // "Classic": consegna garantita, senza bisogno di un mittente registrato
-        returnCredits: true,
-        recipient: [numeroPulito]
-      })
-    });
-
-    const risultato = await risposta.json();
-    if (risposta.ok && risultato.result === "OK") {
-      console.log(`SMS inviato a ${numero}. Crediti rimasti: ${risultato.remaining_sms ?? "?"}`);
-    } else {
-      console.error(`Invio SMS fallito verso ${numero}:`, risultato);
-    }
-  } catch (err) {
-    console.error(`Errore durante l'invio SMS a ${numero}:`, err.message);
+    return JSON.parse(fs.readFileSync(FILE_CODA_SMS, "utf8"));
+  } catch {
+    return [];
   }
 }
+
+function scriviCodaSms(coda) {
+  fs.writeFileSync(FILE_CODA_SMS, JSON.stringify(coda, null, 2));
+}
+
+function accodaSms(numero, testo) {
+  const coda = leggiCodaSms();
+  coda.push({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+    numero,
+    testo,
+    tentativi: 0,
+    creato: new Date().toISOString()
+  });
+  scriviCodaSms(coda);
+}
+
+// L'Arduino chiede qui il prossimo SMS da mandare (uno alla volta,
+// così il codice sull'Arduino resta semplice). Richiede la stessa
+// chiave usata per /api/stato.
+app.get("/api/sms-da-mandare", (req, res) => {
+  const chiave = req.header("X-Chiave");
+  if (chiave !== CHIAVE_ARDUINO) {
+    return res.status(401).json({ errore: "chiave non valida" });
+  }
+  const coda = leggiCodaSms();
+  if (coda.length === 0) {
+    return res.json({ id: null });
+  }
+  const prossimo = coda[0];
+  res.json({ id: prossimo.id, numero: prossimo.numero, testo: prossimo.testo });
+});
+
+// L'Arduino conferma qui che un SMS è stato mandato (o segnala che il
+// tentativo è fallito, per riprovare più tardi senza scartarlo subito)
+app.post("/api/sms-confermato", (req, res) => {
+  const chiave = req.header("X-Chiave");
+  if (chiave !== CHIAVE_ARDUINO) {
+    return res.status(401).json({ errore: "chiave non valida" });
+  }
+  const { id, inviato } = req.body;
+  let coda = leggiCodaSms();
+  const indice = coda.findIndex(s => s.id === id);
+  if (indice === -1) {
+    return res.json({ ok: true }); // già rimosso, niente da fare
+  }
+  if (inviato) {
+    coda.splice(indice, 1);
+  } else {
+    coda[indice].tentativi++;
+    if (coda[indice].tentativi >= MAX_TENTATIVI_SMS) {
+      console.warn(`SMS a ${coda[indice].numero} scartato dopo ${MAX_TENTATIVI_SMS} tentativi falliti`);
+      coda.splice(indice, 1);
+    }
+  }
+  scriviCodaSms(coda);
+  res.json({ ok: true });
+});
 
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
