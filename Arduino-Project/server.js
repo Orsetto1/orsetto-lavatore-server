@@ -139,21 +139,38 @@ if (!process.env.CHIAVE_ARDUINO) {
   console.warn("ATTENZIONE: CHIAVE_ARDUINO non impostata come variabile d'ambiente, sto usando quella di riserva. Da sistemare prima di andare online sul serio.");
 }
 
-// Stato in memoria (per iniziare; per un uso serio conviene un database
-// che non si svuoti ogni volta che il server si riavvia)
-let statoMacchine = {
-  "Lavatrice 9 Kg - A":  { secondi: 0, stato: "libera", telefono: null },
-  "Lavatrice 9 Kg - B":  { secondi: 0, stato: "libera", telefono: null },
-  "Lavatrice 14 Kg - C": { secondi: 0, stato: "libera", telefono: null },
-  "Lavatrice 18 Kg - D": { secondi: 0, stato: "libera", telefono: null },
+// Stato macchine: salvato su file (come contatore, listino e tessere),
+// così un riavvio del server (es. dopo aver caricato un aggiornamento)
+// non fa perdere un ciclo in corso o l'associazione con un cliente in attesa.
+const FILE_STATO_MACCHINE = path.join(__dirname, "stato-macchine.json");
+
+const STATO_MACCHINE_DEFAULT = {
+  "Lavatrice 9 Kg - A":  { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
+  "Lavatrice 9 Kg - B":  { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
+  "Lavatrice 14 Kg - C": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
+  "Lavatrice 18 Kg - D": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
   // Asciugatrici: non ancora collegate fisicamente all'Arduino (in
   // attesa del cambio centraline), ma già pronte a ricevere dati non
   // appena lo saranno, senza dover toccare il server in quel momento.
-  "Asciugatrice 1": { secondi: 0, stato: "libera", telefono: null },
-  "Asciugatrice 2": { secondi: 0, stato: "libera", telefono: null },
-  "Asciugatrice 3": { secondi: 0, stato: "libera", telefono: null },
-  "Asciugatrice 4": { secondi: 0, stato: "libera", telefono: null }
+  "Asciugatrice 1": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
+  "Asciugatrice 2": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
+  "Asciugatrice 3": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
+  "Asciugatrice 4": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null }
 };
+
+function leggiStatoMacchine() {
+  try {
+    return JSON.parse(fs.readFileSync(FILE_STATO_MACCHINE, "utf8"));
+  } catch {
+    return JSON.parse(JSON.stringify(STATO_MACCHINE_DEFAULT)); // copia pulita
+  }
+}
+
+function scriviStatoMacchine(stato) {
+  fs.writeFileSync(FILE_STATO_MACCHINE, JSON.stringify(stato, null, 2));
+}
+
+let statoMacchine = leggiStatoMacchine();
 
 // Registro tessera -> telefono. Chi paga in contanti non ci finisce mai
 // dentro, quindi non riceverà mai un SMS: solo lo stato sul sito.
@@ -198,12 +215,14 @@ app.post("/api/stato", (req, res) => {
         accodaSms(telefono, `${m.nome}: il tuo bucato è pronto! Puoi venire a ritirarlo.`);
       }
       statoMacchine[m.nome].telefono = null;
+      statoMacchine[m.nome].tesseraAssociata = null;
     }
 
     statoMacchine[m.nome].secondi = m.secondi;
     statoMacchine[m.nome].stato = statoNuovo;
   });
 
+  scriviStatoMacchine(statoMacchine);
   res.json({ ok: true });
 });
 
@@ -276,7 +295,21 @@ app.post("/api/associa-macchina", limitaRichieste, (req, res) => {
   if (!telefono) {
     return res.status(404).json({ errore: "tessera non registrata" });
   }
-  statoMacchine[nome].telefono = telefono;
+
+  const macchina = statoMacchine[nome];
+  const macchinaInUso = macchina.stato === "corso" || macchina.stato === "pausa";
+  const giaSegnalataDaAltri = macchina.tesseraAssociata && macchina.tesseraAssociata !== tessera.trim();
+
+  if (macchinaInUso && giaSegnalataDaAltri) {
+    // Qualcun altro ha già segnalato questa macchina mentre è in uso:
+    // non sovrascriviamo in silenzio, altrimenti il primo cliente non
+    // riceverebbe più il suo SMS senza nemmeno accorgersene.
+    return res.status(409).json({ errore: "macchina già segnalata da un'altra tessera" });
+  }
+
+  macchina.telefono = telefono;
+  macchina.tesseraAssociata = tessera.trim();
+  scriviStatoMacchine(statoMacchine);
   res.json({ ok: true });
 });
 
