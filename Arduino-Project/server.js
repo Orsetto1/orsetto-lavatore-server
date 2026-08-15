@@ -87,12 +87,12 @@ if (!process.env.PASSWORD_PROPRIETARIO) {
 
 const LISTINO_DEFAULT = {
   lavatrici: [
-    { nome: "Lavatrice 9 Kg - A",  prezzo: 4.50 },
-    { nome: "Lavatrice 9 Kg - B",  prezzo: 4.50 },
-    { nome: "Lavatrice 14 Kg - C", prezzo: 6.50 },
-    { nome: "Lavatrice 18 Kg - D", prezzo: 8.50 }
+    { nome: "Lavatrice 9 Kg - A",  prezzo: 4.50, prezzoTessera: 4.50 },
+    { nome: "Lavatrice 9 Kg - B",  prezzo: 4.50, prezzoTessera: 4.50 },
+    { nome: "Lavatrice 14 Kg - C", prezzo: 6.50, prezzoTessera: 6.50 },
+    { nome: "Lavatrice 18 Kg - D", prezzo: 8.50, prezzoTessera: 8.50 }
   ],
-  asciugatrici: { minutiPerImpulso: 15, prezzo: 2.50 },
+  asciugatrici: { minutiPerImpulso: 15, prezzo: 2.50, prezzoTessera: 2.50 },
   sacchettoSottovuoto: 2.00,
   promozioni: ""
 };
