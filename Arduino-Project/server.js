@@ -145,17 +145,17 @@ if (!process.env.CHIAVE_ARDUINO) {
 const FILE_STATO_MACCHINE = path.join(__dirname, "stato-macchine.json");
 
 const STATO_MACCHINE_DEFAULT = {
-  "Lavatrice 9 Kg - A":  { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
-  "Lavatrice 9 Kg - B":  { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
-  "Lavatrice 14 Kg - C": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
-  "Lavatrice 18 Kg - D": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
+  "Lavatrice 9 Kg - A":  { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
+  "Lavatrice 9 Kg - B":  { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
+  "Lavatrice 14 Kg - C": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
+  "Lavatrice 18 Kg - D": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
   // Asciugatrici: non ancora collegate fisicamente all'Arduino (in
   // attesa del cambio centraline), ma già pronte a ricevere dati non
   // appena lo saranno, senza dover toccare il server in quel momento.
-  "Asciugatrice 1": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
-  "Asciugatrice 2": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
-  "Asciugatrice 3": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null },
-  "Asciugatrice 4": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null }
+  "Asciugatrice 1": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
+  "Asciugatrice 2": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
+  "Asciugatrice 3": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
+  "Asciugatrice 4": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false }
 };
 
 function leggiStatoMacchine() {
@@ -206,9 +206,29 @@ app.post("/api/stato", (req, res) => {
     const statoPrecedente = statoMacchine[m.nome].stato || "libera";
     const statoNuovo = m.stato || "libera";
 
-    // L'SMS parte solo nel momento esatto in cui una macchina passa a
-    // "pronta" (fine ciclo vera, confermata dal segnale reale della
-    // lavatrice) — non per una semplice pausa, e non due volte di fila.
+    // Un nuovo ciclo vero è iniziato: si riparte con un preavviso "non
+    // ancora mandato" per questo giro
+    const nuovoCicloAvviato = statoNuovo === "corso" && statoPrecedente !== "corso" && statoPrecedente !== "pausa";
+    if (nuovoCicloAvviato) {
+      statoMacchine[m.nome].avviso5MinMandato = false;
+    }
+
+    // Preavviso quando mancano circa 5 minuti alla fine stimata (solo
+    // una volta per ciclo, solo se qualcuno ha lasciato un telefono)
+    const CINQUE_MINUTI_SEC = 5 * 60;
+    if (statoNuovo === "corso" && !statoMacchine[m.nome].avviso5MinMandato &&
+        m.secondi > 0 && m.secondi <= CINQUE_MINUTI_SEC) {
+      const telefono = statoMacchine[m.nome].telefono;
+      if (telefono) {
+        accodaSms(telefono, `${m.nome}: il tuo bucato è quasi pronto, mancano circa 5 minuti.`);
+      }
+      statoMacchine[m.nome].avviso5MinMandato = true;
+    }
+
+    // L'SMS di fine ciclo parte solo nel momento esatto in cui una
+    // macchina passa a "pronta" (fine ciclo vera, confermata dal segnale
+    // reale della lavatrice) — non per una semplice pausa, e non due
+    // volte di fila.
     if (statoNuovo === "pronta" && statoPrecedente !== "pronta") {
       const telefono = statoMacchine[m.nome].telefono;
       if (telefono) {
