@@ -31,6 +31,14 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
+
+// Cartella dove salvare i file che devono restare tra un riavvio e
+// l'altro (tessere, listino, stato macchine, coda SMS, notifiche push).
+// Su Render, con il disco persistente collegato su /var/data, i dati
+// sopravvivono anche ai deploy. Se quella cartella non esiste (es. in
+// prova sul PC, senza il disco di Render), usa semplicemente la
+// cartella del programma, come prima.
+const CARTELLA_DATI = fs.existsSync("/var/data") ? "/var/data" : __dirname;
 const webpush = require("web-push");
 
 const app = express();
@@ -47,7 +55,7 @@ app.get("/", (req, res) => {
 // ---- Contatore visite del sito ----
 // Il numero viene salvato in un file, così resta anche se il server
 // si riavvia (a differenza dei dati delle macchine, che sono solo in memoria).
-const FILE_CONTATORE = path.join(__dirname, "contatore.json");
+const FILE_CONTATORE = path.join(CARTELLA_DATI, "contatore.json");
 
 function leggiContatore() {
   try {
@@ -72,7 +80,7 @@ app.get("/api/visita", (req, res) => {
 // I NOMI delle lavatrici non si toccano da qui: sono agganciati al
 // firmware Arduino, che li usa per riconoscere ogni macchina. Da qui
 // si modificano solo i prezzi (e, per le asciugatrici, anche il tempo).
-const FILE_LISTINO = path.join(__dirname, "listino.json");
+const FILE_LISTINO = path.join(CARTELLA_DATI, "listino.json");
 
 // Cambia questa password prima di usare il pannello sul serio.
 // Deve essere la stessa cosa che scrivi anche in admin.html.
@@ -143,7 +151,7 @@ if (!process.env.CHIAVE_ARDUINO) {
 // Stato macchine: salvato su file (come contatore, listino e tessere),
 // così un riavvio del server (es. dopo aver caricato un aggiornamento)
 // non fa perdere un ciclo in corso o l'associazione con un cliente in attesa.
-const FILE_STATO_MACCHINE = path.join(__dirname, "stato-macchine.json");
+const FILE_STATO_MACCHINE = path.join(CARTELLA_DATI, "stato-macchine.json");
 
 const STATO_MACCHINE_DEFAULT = {
   "Lavatrice 9 Kg - A":  { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
@@ -177,7 +185,7 @@ let statoMacchine = leggiStatoMacchine();
 // dentro, quindi non riceverà mai un SMS: solo lo stato sul sito.
 // Salvato su file (come il contatore e il listino) cosi non si svuota
 // a ogni riavvio del server.
-const FILE_TESSERE = path.join(__dirname, "tessere.json");
+const FILE_TESSERE = path.join(CARTELLA_DATI, "tessere.json");
 
 function leggiRegistroTessere() {
   try {
@@ -346,7 +354,7 @@ app.post("/api/associa-macchina", limitaRichieste, (req, res) => {
 // (POST /api/sms-confermato) cosi non viene rimandato una seconda volta.
 // Salvata su file, come le altre code/registri, per non perdere SMS in
 // sospeso se il server si riavvia.
-const FILE_CODA_SMS = path.join(__dirname, "coda-sms.json");
+const FILE_CODA_SMS = path.join(CARTELLA_DATI, "coda-sms.json");
 const MAX_TENTATIVI_SMS = 20; // dopo troppi tentativi falliti, l'SMS viene scartato
 
 function leggiCodaSms() {
@@ -435,7 +443,7 @@ if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
 webpush.setVapidDetails("mailto:info@orsetto-lavatore.it", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
 // Registro tessera -> sottoscrizione push. Salvato su file come gli altri.
-const FILE_PUSH = path.join(__dirname, "push.json");
+const FILE_PUSH = path.join(CARTELLA_DATI, "push.json");
 
 function leggiRegistroPush() {
   try {
