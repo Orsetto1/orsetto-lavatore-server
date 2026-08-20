@@ -31,6 +31,7 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
+const webpush = require("web-push");
 
 const app = express();
 app.use(cors());
@@ -219,21 +220,25 @@ app.post("/api/stato", (req, res) => {
     if (statoNuovo === "corso" && !statoMacchine[m.nome].avviso5MinMandato &&
         m.secondi > 0 && m.secondi <= CINQUE_MINUTI_SEC) {
       const telefono = statoMacchine[m.nome].telefono;
+      const testoAvviso = `${m.nome}: il tuo bucato è quasi pronto, mancano circa 5 minuti.`;
       if (telefono) {
-        accodaSms(telefono, `${m.nome}: il tuo bucato è quasi pronto, mancano circa 5 minuti.`);
+        accodaSms(telefono, testoAvviso);
       }
+      accodaPush(m.nome, statoMacchine[m.nome].tesseraAssociata, testoAvviso);
       statoMacchine[m.nome].avviso5MinMandato = true;
     }
 
-    // L'SMS di fine ciclo parte solo nel momento esatto in cui una
+    // L'SMS/push di fine ciclo partono solo nel momento esatto in cui una
     // macchina passa a "pronta" (fine ciclo vera, confermata dal segnale
     // reale della lavatrice) — non per una semplice pausa, e non due
     // volte di fila.
     if (statoNuovo === "pronta" && statoPrecedente !== "pronta") {
       const telefono = statoMacchine[m.nome].telefono;
+      const testoFine = `${m.nome}: il tuo bucato è pronto! Puoi venire a ritirarlo.`;
       if (telefono) {
-        accodaSms(telefono, `${m.nome}: il tuo bucato è pronto! Puoi venire a ritirarlo.`);
+        accodaSms(telefono, testoFine);
       }
+      accodaPush(m.nome, statoMacchine[m.nome].tesseraAssociata, testoFine);
       statoMacchine[m.nome].telefono = null;
       statoMacchine[m.nome].tesseraAssociata = null;
     }
@@ -409,6 +414,82 @@ app.post("/api/sms-confermato", (req, res) => {
   scriviCodaSms(coda);
   res.json({ ok: true });
 });
+
+// ========================================================================
+// NOTIFICHE PUSH — alternativa gratuita all'SMS, per chi installa l'app.
+// Non serve nessun modulo GSM: il browser stesso manda la notifica,
+// tramite i server di Apple/Google, senza passare dalla rete telefonica.
+// Convivono con l'SMS: chi ha installato l'app riceve entrambi gli
+// avvisi, chi non l'ha installata riceve comunque solo l'SMS.
+// ========================================================================
+
+// Chiavi VAPID: identificano il nostro server verso Apple/Google. Vanno
+// impostate come variabili d'ambiente su Render (stesso posto delle altre):
+//   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY
+// Quelle scritte qui sotto sono solo una riserva per le prove in locale.
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || "BKjFTRJ6tJeSrcxpY-TeSkTk1R48uFSPAFS8sPAAHKcjDoxyIEuCBwX2ticn2v3ZHQ_CCltmi-o6srcq7eTP6Uo";
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "MmCdiXA3H6qCewrpqviihhWwMILKDvQAOFw2SOeQjus";
+if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+  console.warn("ATTENZIONE: VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY non impostate, sto usando quelle di riserva.");
+}
+webpush.setVapidDetails("mailto:info@orsetto-lavatore.it", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+
+// Registro tessera -> sottoscrizione push. Salvato su file come gli altri.
+const FILE_PUSH = path.join(__dirname, "push.json");
+
+function leggiRegistroPush() {
+  try {
+    return JSON.parse(fs.readFileSync(FILE_PUSH, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function scriviRegistroPush(registro) {
+  fs.writeFileSync(FILE_PUSH, JSON.stringify(registro, null, 2));
+}
+
+let registroPush = leggiRegistroPush();
+
+// Il sito manda qui la "chiave pubblica" da usare per chiedere il
+// permesso di notifica al browser
+app.get("/api/push/chiave-pubblica", (req, res) => {
+  res.json({ chiavePubblica: VAPID_PUBLIC_KEY });
+});
+
+// Il sito manda qui la sottoscrizione, dopo che il cliente ha dato il
+// permesso, abbinata alla tessera (stesso principio del numero di telefono)
+app.post("/api/push/registra", limitaRichieste, (req, res) => {
+  const { tessera, sottoscrizione } = req.body;
+  if (!tesseraValida(tessera) || !sottoscrizione || !sottoscrizione.endpoint) {
+    return res.status(400).json({ errore: "dati non validi" });
+  }
+  registroPush[tessera.trim()] = sottoscrizione;
+  scriviRegistroPush(registroPush);
+  res.json({ ok: true });
+});
+
+// Manda una notifica push a chi ha una tessera associata a quella macchina
+async function accodaPush(nomeMacchina, tesseraAssociata, testo) {
+  if (!tesseraAssociata) return;
+  const sottoscrizione = registroPush[tesseraAssociata];
+  if (!sottoscrizione) return; // questo cliente non ha installato l'app / non ha dato il permesso
+
+  try {
+    await webpush.sendNotification(sottoscrizione, JSON.stringify({
+      titolo: "L'Orsetto Lavatore",
+      testo: testo
+    }));
+  } catch (err) {
+    if (err.statusCode === 404 || err.statusCode === 410) {
+      // la sottoscrizione non è più valida (app disinstallata, permesso tolto): la rimuoviamo
+      delete registroPush[tesseraAssociata];
+      scriviRegistroPush(registroPush);
+    } else {
+      console.error("Errore invio notifica push:", err.message);
+    }
+  }
+}
 
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
