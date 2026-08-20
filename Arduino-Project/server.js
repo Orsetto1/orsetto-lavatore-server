@@ -304,10 +304,15 @@ function tesseraValida(t) {
 // numero di tessera insieme al numero di telefono (pagina registra-tessera.html)
 app.post("/api/registra-tessera", limitaRichieste, (req, res) => {
   const { tessera, telefono } = req.body;
-  if (!tesseraValida(tessera) || !telefonoValido(telefono)) {
-    return res.status(400).json({ errore: "tessera o numero di telefono non validi" });
+  if (!tesseraValida(tessera)) {
+    return res.status(400).json({ errore: "tessera non valida" });
   }
-  registroTessere[tessera.trim()] = telefono.trim();
+  // Il telefono è facoltativo: chi sceglie solo la notifica push non lo
+  // lascia. Se però lo manda, deve essere scritto in modo corretto.
+  if (telefono && !telefonoValido(telefono)) {
+    return res.status(400).json({ errore: "numero di telefono non valido" });
+  }
+  registroTessere[tessera.trim()] = telefono ? telefono.trim() : null;
   scriviRegistroTessere(registroTessere);
   res.json({ ok: true });
 });
@@ -324,10 +329,13 @@ app.post("/api/associa-macchina", limitaRichieste, (req, res) => {
   if (!tesseraValida(tessera)) {
     return res.status(400).json({ errore: "tessera non valida" });
   }
-  const telefono = registroTessere[tessera.trim()];
-  if (!telefono) {
+  // Controllo se la tessera esiste, non se ha un telefono: chi ha
+  // scelto solo la notifica push non ha un telefono associato, ma è
+  // comunque una tessera valida e registrata.
+  if (!(tessera.trim() in registroTessere)) {
     return res.status(404).json({ errore: "tessera non registrata" });
   }
+  const telefono = registroTessere[tessera.trim()];
 
   const macchina = statoMacchine[nome];
   const macchinaInUso = macchina.stato === "corso" || macchina.stato === "pausa";
