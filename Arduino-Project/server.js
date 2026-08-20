@@ -154,17 +154,17 @@ if (!process.env.CHIAVE_ARDUINO) {
 const FILE_STATO_MACCHINE = path.join(CARTELLA_DATI, "stato-macchine.json");
 
 const STATO_MACCHINE_DEFAULT = {
-  "Lavatrice 9 Kg - A":  { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
-  "Lavatrice 9 Kg - B":  { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
-  "Lavatrice 14 Kg - C": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
-  "Lavatrice 18 Kg - D": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
+  "Lavatrice 9 Kg - A":  { secondi: 0, stato: "libera", tesseraAssociata: null, avviso5MinMandato: false },
+  "Lavatrice 9 Kg - B":  { secondi: 0, stato: "libera", tesseraAssociata: null, avviso5MinMandato: false },
+  "Lavatrice 14 Kg - C": { secondi: 0, stato: "libera", tesseraAssociata: null, avviso5MinMandato: false },
+  "Lavatrice 18 Kg - D": { secondi: 0, stato: "libera", tesseraAssociata: null, avviso5MinMandato: false },
   // Asciugatrici: non ancora collegate fisicamente all'Arduino (in
   // attesa del cambio centraline), ma già pronte a ricevere dati non
   // appena lo saranno, senza dover toccare il server in quel momento.
-  "Asciugatrice 1": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
-  "Asciugatrice 2": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
-  "Asciugatrice 3": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false },
-  "Asciugatrice 4": { secondi: 0, stato: "libera", telefono: null, tesseraAssociata: null, avviso5MinMandato: false }
+  "Asciugatrice 1": { secondi: 0, stato: "libera", tesseraAssociata: null, avviso5MinMandato: false },
+  "Asciugatrice 2": { secondi: 0, stato: "libera", tesseraAssociata: null, avviso5MinMandato: false },
+  "Asciugatrice 3": { secondi: 0, stato: "libera", tesseraAssociata: null, avviso5MinMandato: false },
+  "Asciugatrice 4": { secondi: 0, stato: "libera", tesseraAssociata: null, avviso5MinMandato: false }
 };
 
 function leggiStatoMacchine() {
@@ -181,25 +181,38 @@ function scriviStatoMacchine(stato) {
 
 let statoMacchine = leggiStatoMacchine();
 
-// Registro tessera -> telefono. Chi paga in contanti non ci finisce mai
-// dentro, quindi non riceverà mai un SMS: solo lo stato sul sito.
-// Salvato su file (come il contatore e il listino) cosi non si svuota
-// a ogni riavvio del server.
-const FILE_TESSERE = path.join(CARTELLA_DATI, "tessere.json");
+// Registro tessera -> elenco di contatti (fino a 3 persone per tessera,
+// ognuna con SMS o notifica push, in qualsiasi combinazione — utile per
+// tessere condivise, es. in famiglia). Chi paga in contanti non ci
+// finisce mai dentro, quindi non riceverà mai nessun avviso: solo lo
+// stato sul sito. Salvato su file, cosi non si svuota a ogni riavvio.
+const FILE_CONTATTI = path.join(CARTELLA_DATI, "contatti-tessere.json");
+const MAX_CONTATTI_PER_TESSERA = 3;
 
-function leggiRegistroTessere() {
+function leggiContatti() {
   try {
-    return JSON.parse(fs.readFileSync(FILE_TESSERE, "utf8"));
+    return JSON.parse(fs.readFileSync(FILE_CONTATTI, "utf8"));
   } catch {
     return {};
   }
 }
 
-function scriviRegistroTessere(registro) {
-  fs.writeFileSync(FILE_TESSERE, JSON.stringify(registro, null, 2));
+function scriviContatti(registro) {
+  fs.writeFileSync(FILE_CONTATTI, JSON.stringify(registro, null, 2));
 }
 
-let registroTessere = leggiRegistroTessere();
+let registroContatti = leggiContatti();
+
+// Manda l'avviso a tutti i contatti registrati per quella tessera,
+// ognuno nel modo che ha scelto (SMS o notifica push)
+function mandaAvvisoATuttiIContatti(tessera, testo) {
+  if (!tessera) return;
+  const contatti = registroContatti[tessera] || [];
+  contatti.forEach((c) => {
+    if (c.tipo === "sms") accodaSms(c.telefono, testo);
+    if (c.tipo === "push") accodaPush(tessera, c.sottoscrizione, testo);
+  });
+}
 
 // L'Arduino manda qui lo stato aggiornato
 app.post("/api/stato", (req, res) => {
@@ -223,31 +236,20 @@ app.post("/api/stato", (req, res) => {
     }
 
     // Preavviso quando mancano circa 5 minuti alla fine stimata (solo
-    // una volta per ciclo, solo se qualcuno ha lasciato un telefono)
+    // una volta per ciclo, a tutti i contatti registrati per la tessera)
     const CINQUE_MINUTI_SEC = 5 * 60;
     if (statoNuovo === "corso" && !statoMacchine[m.nome].avviso5MinMandato &&
         m.secondi > 0 && m.secondi <= CINQUE_MINUTI_SEC) {
-      const telefono = statoMacchine[m.nome].telefono;
-      const testoAvviso = `${m.nome}: il tuo bucato è quasi pronto, mancano circa 5 minuti.`;
-      if (telefono) {
-        accodaSms(telefono, testoAvviso);
-      }
-      accodaPush(m.nome, statoMacchine[m.nome].tesseraAssociata, testoAvviso);
+      mandaAvvisoATuttiIContatti(statoMacchine[m.nome].tesseraAssociata, `${m.nome}: il tuo bucato è quasi pronto, mancano circa 5 minuti.`);
       statoMacchine[m.nome].avviso5MinMandato = true;
     }
 
-    // L'SMS/push di fine ciclo partono solo nel momento esatto in cui una
+    // L'avviso di fine ciclo parte solo nel momento esatto in cui una
     // macchina passa a "pronta" (fine ciclo vera, confermata dal segnale
     // reale della lavatrice) — non per una semplice pausa, e non due
     // volte di fila.
     if (statoNuovo === "pronta" && statoPrecedente !== "pronta") {
-      const telefono = statoMacchine[m.nome].telefono;
-      const testoFine = `${m.nome}: il tuo bucato è pronto! Puoi venire a ritirarlo.`;
-      if (telefono) {
-        accodaSms(telefono, testoFine);
-      }
-      accodaPush(m.nome, statoMacchine[m.nome].tesseraAssociata, testoFine);
-      statoMacchine[m.nome].telefono = null;
+      mandaAvvisoATuttiIContatti(statoMacchine[m.nome].tesseraAssociata, `${m.nome}: il tuo bucato è pronto! Puoi venire a ritirarlo.`);
       statoMacchine[m.nome].tesseraAssociata = null;
     }
 
@@ -300,20 +302,33 @@ function tesseraValida(t) {
   return typeof t === "string" && t.trim().length >= 1 && t.trim().length <= 40;
 }
 
-// PASSAGGIO 1 — una tantum: il cliente con la tessera registra il proprio
-// numero di tessera insieme al numero di telefono (pagina registra-tessera.html)
+// PASSAGGIO 1 — il cliente registra la tessera. Con SMS, aggiunge subito
+// il proprio numero all'elenco contatti di quella tessera (fino a 3 in
+// totale); con la sola notifica push, questo passaggio serve solo a
+// validare la tessera — il contatto vero si aggiunge dopo, quando il
+// telefono conferma il permesso (vedi /api/push/registra).
 app.post("/api/registra-tessera", limitaRichieste, (req, res) => {
   const { tessera, telefono } = req.body;
   if (!tesseraValida(tessera)) {
     return res.status(400).json({ errore: "tessera non valida" });
   }
-  // Il telefono è facoltativo: chi sceglie solo la notifica push non lo
-  // lascia. Se però lo manda, deve essere scritto in modo corretto.
-  if (telefono && !telefonoValido(telefono)) {
+  if (!telefono) {
+    return res.json({ ok: true }); // percorso "notifica": niente da aggiungere ancora
+  }
+  if (!telefonoValido(telefono)) {
     return res.status(400).json({ errore: "numero di telefono non valido" });
   }
-  registroTessere[tessera.trim()] = telefono ? telefono.trim() : null;
-  scriviRegistroTessere(registroTessere);
+
+  const contattiAttuali = registroContatti[tessera.trim()] || [];
+  const giaPresente = contattiAttuali.some(c => c.tipo === "sms" && c.telefono === telefono.trim());
+  if (!giaPresente) {
+    if (contattiAttuali.length >= MAX_CONTATTI_PER_TESSERA) {
+      return res.status(409).json({ errore: `Questa tessera ha già raggiunto il numero massimo di persone registrate (${MAX_CONTATTI_PER_TESSERA}).` });
+    }
+    contattiAttuali.push({ tipo: "sms", telefono: telefono.trim() });
+    registroContatti[tessera.trim()] = contattiAttuali;
+    scriviContatti(registroContatti);
+  }
   res.json({ ok: true });
 });
 
@@ -329,13 +344,13 @@ app.post("/api/associa-macchina", limitaRichieste, (req, res) => {
   if (!tesseraValida(tessera)) {
     return res.status(400).json({ errore: "tessera non valida" });
   }
-  // Controllo se la tessera esiste, non se ha un telefono: chi ha
-  // scelto solo la notifica push non ha un telefono associato, ma è
-  // comunque una tessera valida e registrata.
-  if (!(tessera.trim() in registroTessere)) {
+  // Una tessera è "registrata" se ha almeno un contatto valido (SMS o
+  // push) — chi ha lasciato solo il numero senza mai completare la
+  // notifica push non risulta ancora registrato per davvero.
+  const contattiTessera = registroContatti[tessera.trim()];
+  if (!contattiTessera || contattiTessera.length === 0) {
     return res.status(404).json({ errore: "tessera non registrata" });
   }
-  const telefono = registroTessere[tessera.trim()];
 
   const macchina = statoMacchine[nome];
   const macchinaInUso = macchina.stato === "corso" || macchina.stato === "pausa";
@@ -344,11 +359,10 @@ app.post("/api/associa-macchina", limitaRichieste, (req, res) => {
   if (macchinaInUso && giaSegnalataDaAltri) {
     // Qualcun altro ha già segnalato questa macchina mentre è in uso:
     // non sovrascriviamo in silenzio, altrimenti il primo cliente non
-    // riceverebbe più il suo SMS senza nemmeno accorgersene.
+    // riceverebbe più il suo avviso senza nemmeno accorgersene.
     return res.status(409).json({ errore: "macchina già segnalata da un'altra tessera" });
   }
 
-  macchina.telefono = telefono;
   macchina.tesseraAssociata = tessera.trim();
   scriviStatoMacchine(statoMacchine);
   res.json({ ok: true });
@@ -450,23 +464,6 @@ if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
 }
 webpush.setVapidDetails("mailto:info@orsetto-lavatore.it", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
-// Registro tessera -> sottoscrizione push. Salvato su file come gli altri.
-const FILE_PUSH = path.join(CARTELLA_DATI, "push.json");
-
-function leggiRegistroPush() {
-  try {
-    return JSON.parse(fs.readFileSync(FILE_PUSH, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-function scriviRegistroPush(registro) {
-  fs.writeFileSync(FILE_PUSH, JSON.stringify(registro, null, 2));
-}
-
-let registroPush = leggiRegistroPush();
-
 // Il sito manda qui la "chiave pubblica" da usare per chiedere il
 // permesso di notifica al browser
 app.get("/api/push/chiave-pubblica", (req, res) => {
@@ -474,23 +471,32 @@ app.get("/api/push/chiave-pubblica", (req, res) => {
 });
 
 // Il sito manda qui la sottoscrizione, dopo che il cliente ha dato il
-// permesso, abbinata alla tessera (stesso principio del numero di telefono)
+// permesso — si aggiunge all'elenco contatti di quella tessera (fino a
+// 3 in totale, contando insieme SMS e notifiche)
 app.post("/api/push/registra", limitaRichieste, (req, res) => {
   const { tessera, sottoscrizione } = req.body;
   if (!tesseraValida(tessera) || !sottoscrizione || !sottoscrizione.endpoint) {
     return res.status(400).json({ errore: "dati non validi" });
   }
-  registroPush[tessera.trim()] = sottoscrizione;
-  scriviRegistroPush(registroPush);
+
+  const contattiAttuali = registroContatti[tessera.trim()] || [];
+  const giaPresente = contattiAttuali.some(c => c.tipo === "push" && c.sottoscrizione.endpoint === sottoscrizione.endpoint);
+  if (!giaPresente) {
+    if (contattiAttuali.length >= MAX_CONTATTI_PER_TESSERA) {
+      return res.status(409).json({ errore: `Questa tessera ha già raggiunto il numero massimo di persone registrate (${MAX_CONTATTI_PER_TESSERA}).` });
+    }
+    contattiAttuali.push({ tipo: "push", sottoscrizione });
+    registroContatti[tessera.trim()] = contattiAttuali;
+    scriviContatti(registroContatti);
+  }
   res.json({ ok: true });
 });
 
-// Manda una notifica push a chi ha una tessera associata a quella macchina
-async function accodaPush(nomeMacchina, tesseraAssociata, testo) {
-  if (!tesseraAssociata) return;
-  const sottoscrizione = registroPush[tesseraAssociata];
-  if (!sottoscrizione) return; // questo cliente non ha installato l'app / non ha dato il permesso
-
+// Manda una notifica push a un contatto specifico. Se la sottoscrizione
+// non è più valida (app disinstallata, permesso tolto), la toglie solo
+// lei dall'elenco — gli altri eventuali contatti della stessa tessera
+// restano intatti.
+async function accodaPush(tessera, sottoscrizione, testo) {
   try {
     await webpush.sendNotification(sottoscrizione, JSON.stringify({
       titolo: "L'Orsetto Lavatore",
@@ -498,9 +504,11 @@ async function accodaPush(nomeMacchina, tesseraAssociata, testo) {
     }));
   } catch (err) {
     if (err.statusCode === 404 || err.statusCode === 410) {
-      // la sottoscrizione non è più valida (app disinstallata, permesso tolto): la rimuoviamo
-      delete registroPush[tesseraAssociata];
-      scriviRegistroPush(registroPush);
+      const contatti = registroContatti[tessera] || [];
+      registroContatti[tessera] = contatti.filter(
+        c => !(c.tipo === "push" && c.sottoscrizione.endpoint === sottoscrizione.endpoint)
+      );
+      scriviContatti(registroContatti);
     } else {
       console.error("Errore invio notifica push:", err.message);
     }
